@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from pathlib import Path
 from typing import Any, List
 
 _MAX_BLOCK_CHARS = 4000
+
+# Markdown fenced code block: ```lang\n ... ``` (language is optional).
+_FENCE_RE = re.compile(r"```[ \t]*([\w.+#-]*)[ \t]*\n?(.*?)```", re.DOTALL)
+# Inline code span: `code` (single line, no embedded backticks).
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 
 
 def _esc(text: str) -> str:
@@ -22,6 +28,46 @@ def _truncate(text: str, limit: int = _MAX_BLOCK_CHARS) -> str:
     return text
 
 
+def _render_inline(text: str) -> str:
+    """Escape text and turn inline `code` spans into <code> elements."""
+    parts: List[str] = []
+    last = 0
+    for m in _INLINE_CODE_RE.finditer(text):
+        parts.append(_esc(text[last:m.start()]))
+        parts.append(f"<code>{html.escape(m.group(1))}</code>")
+        last = m.end()
+    parts.append(_esc(text[last:]))
+    return "".join(parts)
+
+
+def _render_text(raw: str) -> str:
+    """Render message text, distinguishing fenced code blocks and inline code.
+
+    Fenced ```blocks``` become a styled monospace box (with an optional language
+    label); inline `code` becomes a <code> span; everything else is plain text
+    with line breaks preserved.
+    """
+    raw = _truncate(raw)
+    parts: List[str] = []
+    last = 0
+    for m in _FENCE_RE.finditer(raw):
+        before = raw[last:m.start()]
+        if before:
+            parts.append(_render_inline(before))
+        lang = (m.group(1) or "").strip()
+        code = (m.group(2) or "").strip("\n")
+        header = f'<div class="codelang">{html.escape(lang)}</div>' if lang else ""
+        parts.append(
+            f'<div class="codeblock">{header}'
+            f'<pre class="code">{html.escape(code)}</pre></div>'
+        )
+        last = m.end()
+    rest = raw[last:]
+    if rest:
+        parts.append(_render_inline(rest))
+    return "".join(parts)
+
+
 def _render_blocks(content: Any) -> List[str]:
     """Render the `content` of one message into a list of HTML fragments."""
     out: List[str] = []
@@ -29,10 +75,10 @@ def _render_blocks(content: Any) -> List[str]:
         return out
     if isinstance(content, str):
         if content.strip():
-            out.append(f'<div class="text">{_esc(_truncate(content))}</div>')
+            out.append(f'<div class="text">{_render_text(content)}</div>')
         return out
     if not isinstance(content, list):
-        out.append(f'<div class="text">{_esc(_truncate(str(content)))}</div>')
+        out.append(f'<div class="text">{_render_text(str(content))}</div>')
         return out
 
     for block in content:
@@ -43,7 +89,7 @@ def _render_blocks(content: Any) -> List[str]:
         if btype == "text":
             txt = block.get("text", "")
             if txt.strip():
-                out.append(f'<div class="text">{_esc(_truncate(txt))}</div>')
+                out.append(f'<div class="text">{_render_text(txt)}</div>')
         elif btype == "thinking":
             txt = block.get("thinking", "")
             if txt.strip():
@@ -125,6 +171,14 @@ body {{ font-family: 'Segoe UI', sans-serif; font-size: 16px; color: #1f2328; }}
 .role {{ font-weight: 600; margin-bottom: 6px; color: #444; }}
 .ts {{ font-weight: 400; color: #999; font-size: 13px; margin-left: 8px; }}
 .text {{ margin: 4px 0; line-height: 1.5; }}
+.codeblock {{ margin: 6px 0; }}
+.codelang {{ display: inline-block; font-family: 'Consolas', monospace;
+            font-size: 12px; color: #555; background: #e6e6e2;
+            padding: 1px 8px; border-radius: 6px 6px 0 0; }}
+pre.code {{ background: #f4f4f2; border: 1px solid #e0e0dc; border-radius: 6px;
+           padding: 8px 10px; }}
+code {{ font-family: 'Consolas', monospace; font-size: 14px; color: #b5005a;
+       background: #f0f0f0; padding: 1px 4px; }}
 .thinking {{ margin: 4px 0; padding: 6px 8px; background: #fafafa;
             border-left: 3px solid #c9c9c9; color: #777; font-style: italic; }}
 .tool {{ margin: 4px 0; padding: 6px 8px; background: #fff8ec;
