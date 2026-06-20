@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
                 for s in self._all_sessions
                 if term in s.title.lower()
                 or term in s.filename.lower()
-                or term in (s.cwd or "").lower()
+                or term in (s.project_dir or "").lower()
                 or term in s.project_name.lower()
             ]
         else:
@@ -159,9 +159,9 @@ class MainWindow(QMainWindow):
     def _populate_tree(self, sessions: List[SessionMeta]) -> None:
         self.tree.clear()
         groups: Dict[str, List[SessionMeta]] = defaultdict(list)
-        # Key groups by cwd (stable) but display the project name.
+        # Key groups by project_dir (stable) but display the project name.
         for s in sessions:
-            groups[s.cwd or s.storage_dir.name].append(s)
+            groups[s.project_dir or s.storage_dir.name].append(s)
 
         # Sort groups by their newest session.
         ordered = sorted(
@@ -183,10 +183,10 @@ class MainWindow(QMainWindow):
             for s in items:
                 child = QTreeWidgetItem(group_item)
                 subtitle = f"{s.filename}"
-                if s.cwd:
-                    subtitle += f"  ·  {s.cwd}"
+                if s.project_dir:
+                    subtitle += f"  ·  {s.project_dir}"
                 child.setText(0, f"{s.title}\n{subtitle}")
-                child.setToolTip(0, f"{s.title}\n{s.filename}\n{s.cwd or ''}")
+                child.setToolTip(0, f"{s.title}\n{s.filename}\n{s.project_dir or ''}")
                 child.setData(0, _META_ROLE, s)
 
             group_item.setExpanded(True)
@@ -207,7 +207,7 @@ class MainWindow(QMainWindow):
     def _on_selection_changed(self) -> None:
         meta = self._current_meta()
         has = meta is not None
-        self.open_proj_btn.setEnabled(has and bool(meta and meta.cwd))
+        self.open_proj_btn.setEnabled(has and bool(meta and meta.project_dir))
         self.open_store_btn.setEnabled(has)
         self.delete_btn.setEnabled(has)
         if meta is None:
@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         size_kb = meta.size / 1024
         self.meta_label.setText(
             f"{meta.filename}  ·  {meta.message_count} messages  ·  "
-            f"{size_kb:.1f} KB  ·  {meta.cwd or '(no cwd recorded)'}"
+            f"{size_kb:.1f} KB  ·  {meta.project_dir or '(no project dir recorded)'}"
         )
         try:
             self.preview.setHtml(render_session_html(meta.file_path))
@@ -237,7 +237,7 @@ class MainWindow(QMainWindow):
         self.tree.setCurrentItem(item)
         menu = QMenu(self)
         act_proj = menu.addAction("Open project folder")
-        act_proj.setEnabled(bool(data.cwd))
+        act_proj.setEnabled(bool(data.project_dir))
         act_store = menu.addAction("Open storage folder")
         menu.addSeparator()
         act_del = menu.addAction("Delete (to Recycle Bin)")
@@ -252,15 +252,15 @@ class MainWindow(QMainWindow):
     # ---- Actions --------------------------------------------------------
     def _open_project_folder(self) -> None:
         meta = self._current_meta()
-        if meta is None or not meta.cwd:
+        if meta is None or not meta.project_dir:
             return
         try:
-            _open_in_file_manager(meta.cwd)
+            _open_in_file_manager(meta.project_dir)
         except FileNotFoundError:
             QMessageBox.warning(
                 self,
                 "Folder not found",
-                f"The project folder no longer exists:\n{meta.cwd}",
+                f"The project folder no longer exists:\n{meta.project_dir}",
             )
 
     def _open_storage_folder(self) -> None:

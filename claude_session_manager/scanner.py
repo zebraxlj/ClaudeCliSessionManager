@@ -60,7 +60,7 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
         return None
 
     title: Optional[str] = None
-    cwd: Optional[str] = None
+    project_dir: Optional[str] = None
     first_prompt: Optional[str] = None
     last_prompt: Optional[str] = None
     created: Optional[str] = None
@@ -86,8 +86,8 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
                     last_prompt = obj.get("lastPrompt") or last_prompt
                 elif btype in ("user", "assistant"):
                     count += 1
-                    if cwd is None and obj.get("cwd"):
-                        cwd = obj.get("cwd")
+                    if project_dir is None and obj.get("cwd"):
+                        project_dir = obj.get("cwd")
                     if created is None and obj.get("timestamp"):
                         created = obj.get("timestamp")
                     if (
@@ -107,8 +107,8 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
         or path.stem
     )
 
-    if cwd:
-        project_name = Path(cwd).name or cwd
+    if project_dir:
+        project_name = Path(project_dir).name or project_dir
     else:
         project_name = path.parent.name
 
@@ -119,7 +119,7 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
         file_path=path,
         storage_dir=path.parent,
         title=display_title,
-        cwd=cwd,
+        project_dir=project_dir,
         project_name=project_name,
         created_at=created,
         modified_at=stat.st_mtime,

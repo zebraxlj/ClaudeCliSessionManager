@@ -28,11 +28,11 @@ class SessionMeta:
     title: str
     """Human-readable title (ai-title, falling back to first prompt / id)."""
 
-    cwd: Optional[str]
+    project_dir: Optional[str]
     """The real working directory the session ran in, if recorded."""
 
     project_name: str
-    """Display name for grouping (last path component of cwd, or dir name)."""
+    """Display name for grouping (last path component of project_dir, or dir name)."""
 
     created_at: Optional[str]
     """ISO timestamp of the first message, if recorded."""
@@ -55,4 +55,4 @@ class SessionMeta:
 
     @property
     def project_dir_exists(self) -> bool:
-        return bool(self.cwd) and Path(self.cwd).exists()
+        return bool(self.project_dir) and Path(self.project_dir).exists()
