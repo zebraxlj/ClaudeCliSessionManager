@@ -17,11 +17,13 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from collections import defaultdict
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -35,6 +37,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStyledItemDelegate,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -52,6 +55,8 @@ from ..scanner import scan_sessions
 # Role used to stash data on list items.
 _META_ROLE = Qt.UserRole  # SessionMeta on a session list item.
 _SCOPE_ROLE = Qt.UserRole + 1  # scope key (str) or None on a nav item.
+_TITLE_ROLE = Qt.UserRole + 2  # session title (drawn by the delegate).
+_SUB_ROLE = Qt.UserRole + 3  # session subtitle line (drawn by the delegate).
 
 # Header band height shared by all three panes so their top edges line up.
 _HEADER_H = 44
@@ -92,7 +97,6 @@ QSplitter::handle { background: #e5e5e5; }
     outline: 0;
 }
 #sessionList::item {
-    padding: 8px 10px;
     margin: 2px 6px;
     border-radius: 6px;
 }
@@ -116,6 +120,68 @@ def _open_in_file_manager(path: str) -> None:
 def _session_group_key(s: SessionMeta) -> str:
     """Stable grouping key for a session (real project dir, else storage dir)."""
     return s.project_dir or s.storage_dir.name
+
+
+def _format_updated(ts: float) -> str:
+    """Relative time for recent edits, absolute date once older than a week."""
+    delta = time.time() - ts
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)} min ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)} h ago"
+    if delta < 7 * 86400:
+        return f"{int(delta // 86400)} d ago"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+
+
+def _format_full(ts: float) -> str:
+    """Full timestamp for tooltips."""
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+
+
+class _SessionItemDelegate(QStyledItemDelegate):
+    """Draws a session row as a bold dark title over a smaller grey subtitle."""
+
+    _TITLE_COLOR = QColor("#1a1a1a")
+    _SUB_COLOR = QColor("#888888")
+    _LEFT = 16
+    _RIGHT = 12
+
+    def sizeHint(self, option, index):  # noqa: N802 - Qt override
+        return QSize(0, 52)
+
+    def paint(self, painter, option, index):  # noqa: N802 - Qt override
+        # Let the style paint the background + selection/hover (driven by QSS).
+        super().paint(painter, option, index)
+
+        title = index.data(_TITLE_ROLE) or ""
+        subtitle = index.data(_SUB_ROLE) or ""
+        rect = option.rect
+        left = rect.left() + self._LEFT
+        width = rect.width() - self._LEFT - self._RIGHT
+
+        painter.save()
+
+        title_font = QFont(option.font)
+        title_font.setPointSize(option.font.pointSize() + 1)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.setPen(self._TITLE_COLOR)
+        tfm = painter.fontMetrics()
+        ty = rect.top() + 9 + tfm.ascent()
+        painter.drawText(left, ty, tfm.elidedText(title, Qt.ElideRight, width))
+
+        sub_font = QFont(option.font)
+        sub_font.setPointSize(max(option.font.pointSize() - 2, 8))
+        painter.setFont(sub_font)
+        painter.setPen(self._SUB_COLOR)
+        sfm = painter.fontMetrics()
+        sy = rect.top() + 9 + tfm.height() + 3 + sfm.ascent()
+        painter.drawText(left, sy, sfm.elidedText(subtitle, Qt.ElideRight, width))
+
+        painter.restore()
 
 
 def _make_header(*widgets: QWidget) -> QWidget:
@@ -191,6 +257,8 @@ class MainWindow(QMainWindow):
         self.list = QListWidget()
         self.list.setObjectName("sessionList")
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setItemDelegate(_SessionItemDelegate(self.list))
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_context_menu)
         self.list.currentItemChanged.connect(self._on_selection_changed)
@@ -322,13 +390,19 @@ class MainWindow(QMainWindow):
         self.list.clear()
         show_project = self._current_scope is None
         for s in sessions:
+            updated = _format_updated(s.modified_at)
             if show_project:
-                subtitle = f"{s.project_name}  ·  {s.message_count} msgs  ·  {s.filename}"
+                subtitle = f"Updated {updated}  ·  {s.message_count} msgs  ·  {s.project_name}"
             else:
-                subtitle = f"{s.message_count} msgs  ·  {s.filename}"
-            item = QListWidgetItem(f"{s.title}\n{subtitle}")
-            item.setToolTip(f"{s.title}\n{s.filename}\n{s.project_dir or ''}")
+                subtitle = f"Updated {updated}  ·  {s.message_count} msgs"
+            item = QListWidgetItem()
+            item.setData(_TITLE_ROLE, s.title)
+            item.setData(_SUB_ROLE, subtitle)
             item.setData(_META_ROLE, s)
+            item.setToolTip(
+                f"{s.title}\n{s.filename}\n{s.project_dir or ''}\n"
+                f"Updated {_format_full(s.modified_at)}"
+            )
             self.list.addItem(item)
 
         scope_txt = "All projects" if show_project else self.nav.currentItem().text().strip()
@@ -442,8 +516,11 @@ class MainWindow(QMainWindow):
 
 def run() -> int:
     app = QApplication(sys.argv)
-    # Base application font (Windows default is ~9pt; bump ~30% for readability).
-    app.setFont(QFont("Segoe UI", 12))
+    # Base application font: Segoe UI for Latin, falling back to Microsoft YaHei
+    # for CJK so Chinese renders in the clean system UI font (not serif SimSun).
+    base_font = QFont("Segoe UI", 11)
+    base_font.setFamilies(["Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei"])
+    app.setFont(base_font)
     window = MainWindow()
     window.show()
     return app.exec_()
