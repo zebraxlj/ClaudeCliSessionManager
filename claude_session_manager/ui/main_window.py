@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QSize, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -36,9 +36,11 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QShortcut,
     QSplitter,
     QStyledItemDelegate,
     QTextBrowser,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -102,6 +104,21 @@ QSplitter::handle { background: #e5e5e5; }
 }
 #sessionList::item:hover { background: #f0f6fc; }
 #sessionList::item:selected { background: #cfe4fa; color: #000; }
+
+#findBar {
+    background: #fafafa;
+    border: 1px solid #e0e0dc;
+    border-radius: 6px;
+}
+#findBar QPushButton {
+    border: none;
+    background: transparent;
+    padding: 2px 6px;
+    font-size: 14px;
+}
+#findBar QPushButton:hover { background: #e6e6e2; border-radius: 4px; }
+#findBar QPushButton:disabled { color: #bbb; }
+#findCount { color: #888; font-size: 13px; min-width: 64px; }
 """
 
 
@@ -312,9 +329,59 @@ class MainWindow(QMainWindow):
         self.preview = QTextBrowser()
         self.preview.setOpenExternalLinks(True)
         body_layout.addWidget(self.meta_label)
+        body_layout.addWidget(self._build_find_bar())
         body_layout.addWidget(self.preview, 1)
         layout.addWidget(body, 1)
+
+        # Ctrl+F opens the in-preview find bar; Esc (inside it) closes it.
+        find_sc = QShortcut(QKeySequence.Find, self.preview)
+        find_sc.setContext(Qt.WidgetWithChildrenShortcut)
+        find_sc.activated.connect(self._show_find)
         return panel
+
+    def _build_find_bar(self) -> QWidget:
+        """A hidden find-in-preview bar (input + prev/next + match count)."""
+        bar = QWidget()
+        bar.setObjectName("findBar")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 4, 6, 4)
+        row.setSpacing(4)
+
+        self.find_input = QLineEdit()
+        self.find_input.setPlaceholderText("Find in conversation…")
+        self.find_input.setClearButtonEnabled(True)
+        self.find_input.textChanged.connect(self._on_find_text_changed)
+        self.find_input.returnPressed.connect(lambda: self._goto_match(1))
+
+        self.find_count = QLabel("")
+        self.find_count.setObjectName("findCount")
+        self.find_count.setAlignment(Qt.AlignCenter)
+
+        self.find_prev_btn = QPushButton("▲")
+        self.find_prev_btn.setToolTip("Previous match")
+        self.find_prev_btn.clicked.connect(lambda: self._goto_match(-1))
+        self.find_next_btn = QPushButton("▼")
+        self.find_next_btn.setToolTip("Next match")
+        self.find_next_btn.clicked.connect(lambda: self._goto_match(1))
+        close_btn = QPushButton("✕")
+        close_btn.setToolTip("Close (Esc)")
+        close_btn.clicked.connect(self._hide_find)
+
+        row.addWidget(self.find_input, 1)
+        row.addWidget(self.find_count)
+        row.addWidget(self.find_prev_btn)
+        row.addWidget(self.find_next_btn)
+        row.addWidget(close_btn)
+
+        esc_sc = QShortcut(QKeySequence(Qt.Key_Escape), bar)
+        esc_sc.setContext(Qt.WidgetWithChildrenShortcut)
+        esc_sc.activated.connect(self._hide_find)
+
+        self.find_bar = bar
+        self._find_matches: List[QTextCursor] = []
+        self._find_idx = -1
+        bar.hide()
+        return bar
 
     # ---- Grouping helper ------------------------------------------------
     def _grouped_projects(self) -> List[Tuple[str, List[SessionMeta]]]:
@@ -457,6 +524,8 @@ class MainWindow(QMainWindow):
             self.header_label.setText("Select a session to preview")
             self.meta_label.setText("")
             self.preview.clear()
+            if self.find_bar.isVisible():
+                self._on_find_text_changed()
             return
         self.header_label.setText(meta.title)
         size_kb = meta.size / 1024
@@ -468,6 +537,63 @@ class MainWindow(QMainWindow):
             self.preview.setHtml(render_session_html(meta.file_path))
         except Exception as exc:  # noqa: BLE001 - surface any render error
             self.preview.setHtml(f"<p>Failed to render: {exc}</p>")
+        # Re-run the active find against the freshly loaded document.
+        if self.find_bar.isVisible():
+            self._on_find_text_changed()
+
+    # ---- Find in preview ------------------------------------------------
+    _FIND_BG = QColor("#fff3a3")
+
+    def _show_find(self) -> None:
+        self.find_bar.show()
+        self.find_input.setFocus()
+        self.find_input.selectAll()
+        self._on_find_text_changed()
+
+    def _hide_find(self) -> None:
+        self.find_bar.hide()
+        self._find_matches = []
+        self._find_idx = -1
+        self.preview.setExtraSelections([])
+        self.preview.setFocus()
+
+    def _on_find_text_changed(self) -> None:
+        """Recompute matches, highlight them all, and jump to the first one."""
+        term = self.find_input.text()
+        self._find_matches = []
+        if term:
+            doc = self.preview.document()
+            cur = doc.find(term, 0)
+            while not cur.isNull():
+                self._find_matches.append(QTextCursor(cur))
+                cur = doc.find(term, cur)
+
+        selections = []
+        fmt = QTextCharFormat()
+        fmt.setBackground(self._FIND_BG)
+        for c in self._find_matches:
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = c
+            sel.format = fmt
+            selections.append(sel)
+        self.preview.setExtraSelections(selections)
+
+        self._find_idx = -1
+        if self._find_matches:
+            self._goto_match(1)
+        else:
+            self.find_count.setText("No results" if term else "")
+        has = bool(self._find_matches)
+        self.find_prev_btn.setEnabled(has)
+        self.find_next_btn.setEnabled(has)
+
+    def _goto_match(self, delta: int) -> None:
+        if not self._find_matches:
+            return
+        self._find_idx = (self._find_idx + delta) % len(self._find_matches)
+        self.preview.setTextCursor(self._find_matches[self._find_idx])
+        self.preview.ensureCursorVisible()
+        self.find_count.setText(f"{self._find_idx + 1} / {len(self._find_matches)}")
 
     # ---- Context menu ---------------------------------------------------
     def _show_context_menu(self, pos) -> None:
