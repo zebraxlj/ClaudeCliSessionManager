@@ -14,6 +14,7 @@ shows and what the search box filters within.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -22,7 +23,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtCore import QRect, QSize, Qt, QTimer
 from PyQt5.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -139,6 +140,24 @@ def _session_group_key(s: SessionMeta) -> str:
     return s.project_dir or s.storage_dir.name
 
 
+def _append_jsonl_line(path, line: str) -> None:
+    """Append a single JSONL *line* to *path*, ensuring a newline boundary.
+
+    Uses append mode so the write lands at the true end of file even if another
+    process (e.g. an active Claude Code session) is writing concurrently. Raises
+    OSError if the file is locked / unwritable.
+    """
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        need_nl = fh.tell() > 0
+        if need_nl:
+            fh.seek(-1, os.SEEK_END)
+            need_nl = fh.read(1) != b"\n"
+    prefix = b"\n" if need_nl else b""
+    with open(path, "ab") as fh:
+        fh.write(prefix + (line + "\n").encode("utf-8"))
+
+
 def _format_updated(ts: float) -> str:
     """Relative time for recent edits, absolute date once older than a week."""
     delta = time.time() - ts
@@ -159,15 +178,51 @@ def _format_full(ts: float) -> str:
 
 
 class _SessionItemDelegate(QStyledItemDelegate):
-    """Draws a session row as a bold dark title over a smaller grey subtitle."""
+    """Draws a session row as a bold dark title over a smaller grey subtitle.
+
+    Supports inline renaming: an editor opens over the title line, pre-filled
+    with the current title. On commit it calls *on_rename(meta, new_title)*.
+    """
 
     _TITLE_COLOR = QColor("#1a1a1a")
     _SUB_COLOR = QColor("#888888")
     _LEFT = 16
     _RIGHT = 12
 
+    def __init__(self, parent=None, on_rename=None) -> None:
+        super().__init__(parent)
+        self._on_rename = on_rename
+
     def sizeHint(self, option, index):  # noqa: N802 - Qt override
         return QSize(0, 52)
+
+    # ---- Inline rename editor ----
+    def createEditor(self, parent, option, index):  # noqa: N802 - Qt override
+        editor = QLineEdit(parent)
+        font = QFont(option.font)
+        font.setPointSize(option.font.pointSize() + 1)
+        font.setBold(True)
+        editor.setFont(font)
+        return editor
+
+    def setEditorData(self, editor, index):  # noqa: N802 - Qt override
+        editor.setText(index.data(_TITLE_ROLE) or "")
+        editor.selectAll()
+
+    def setModelData(self, editor, model, index):  # noqa: N802 - Qt override
+        new_title = editor.text().strip()
+        meta = index.data(_META_ROLE)
+        if self._on_rename and isinstance(meta, SessionMeta):
+            # Defer so the view finishes closing the editor before we reload.
+            QTimer.singleShot(0, lambda m=meta, t=new_title: self._on_rename(m, t))
+
+    def updateEditorGeometry(self, editor, option, index):  # noqa: N802 - Qt override
+        rect = QRect(option.rect)
+        rect.setLeft(rect.left() + self._LEFT - 2)
+        rect.setRight(rect.right() - self._RIGHT)
+        rect.setTop(rect.top() + 5)
+        rect.setHeight(max(editor.sizeHint().height(), 26))
+        editor.setGeometry(rect)
 
     def paint(self, painter, option, index):  # noqa: N802 - Qt override
         # Let the style paint the background + selection/hover (driven by QSS).
@@ -183,7 +238,7 @@ class _SessionItemDelegate(QStyledItemDelegate):
 
         title_font = QFont(option.font)
         title_font.setPointSize(option.font.pointSize() + 1)
-        title_font.setBold(True)
+        title_font.setBold(False)
         painter.setFont(title_font)
         painter.setPen(self._TITLE_COLOR)
         tfm = painter.fontMetrics()
@@ -284,11 +339,18 @@ class MainWindow(QMainWindow):
         self.list.setObjectName("sessionList")
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.list.setItemDelegate(_SessionItemDelegate(self.list))
+        self.list.setEditTriggers(QAbstractItemView.NoEditTriggers)  # edit only via F2 / menu
+        self.list.setItemDelegate(
+            _SessionItemDelegate(self.list, on_rename=self._apply_inline_rename)
+        )
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_context_menu)
         self.list.currentItemChanged.connect(self._on_selection_changed)
         layout.addWidget(self.list, 1)
+
+        rename_sc = QShortcut(QKeySequence(Qt.Key_F2), self.list)
+        rename_sc.setContext(Qt.WidgetWithChildrenShortcut)
+        rename_sc.activated.connect(self._rename_selected)
 
         btn_bar = QHBoxLayout()
         btn_bar.setContentsMargins(6, 4, 6, 4)
@@ -494,6 +556,7 @@ class MainWindow(QMainWindow):
             else:
                 subtitle = f"Updated {updated}  ·  {s.message_count} msgs"
             item = QListWidgetItem()
+            item.setFlags(item.flags() | Qt.ItemIsEditable)  # enable inline rename
             item.setData(_TITLE_ROLE, s.title)
             item.setData(_SUB_ROLE, subtitle)
             item.setData(_META_ROLE, s)
@@ -605,13 +668,17 @@ class MainWindow(QMainWindow):
             return
         self.list.setCurrentItem(item)
         menu = QMenu(self)
+        act_rename = menu.addAction("Rename… (F2)")
+        menu.addSeparator()
         act_proj = menu.addAction("Open project folder")
         act_proj.setEnabled(bool(data.project_dir))
         act_store = menu.addAction("Open storage folder")
         menu.addSeparator()
         act_del = menu.addAction("Delete (to Recycle Bin)")
         chosen = menu.exec_(self.list.viewport().mapToGlobal(pos))
-        if chosen == act_proj:
+        if chosen == act_rename:
+            self._rename_selected()
+        elif chosen == act_proj:
             self._open_project_folder()
         elif chosen == act_store:
             self._open_storage_folder()
@@ -619,6 +686,57 @@ class MainWindow(QMainWindow):
             self._delete_selected()
 
     # ---- Actions --------------------------------------------------------
+    def _select_session(self, session_id: str) -> None:
+        """Re-select the list row for *session_id*, if present."""
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            data = item.data(_META_ROLE)
+            if isinstance(data, SessionMeta) and data.session_id == session_id:
+                self.list.setCurrentItem(item)
+                return
+
+    def _rename_selected(self) -> None:
+        """Open the inline editor over the selected row's title."""
+        item = self.list.currentItem()
+        if item is not None:
+            self.list.editItem(item)
+
+    def _apply_inline_rename(self, meta: SessionMeta, new_title: str) -> None:
+        """Persist an inline rename, then refresh and re-select the row."""
+        if not new_title or new_title == meta.title:
+            return
+        if not self._write_title_with_retry(meta, new_title):
+            return
+        session_id = meta.session_id
+        self.reload()
+        self._select_session(session_id)
+
+    def _write_title_with_retry(
+        self, meta: SessionMeta, new_title: str, attempts: int = 5, delay: float = 0.15
+    ) -> bool:
+        """Append an ai-title line, retrying on transient lock errors.
+
+        Only pops an error dialog once every attempt has failed (e.g. the file
+        is held open by a running terminal session).
+        """
+        record = json.dumps({"type": "ai-title", "aiTitle": new_title}, ensure_ascii=False)
+        last_err: Optional[Exception] = None
+        for _ in range(attempts):
+            try:
+                _append_jsonl_line(meta.file_path, record)
+                return True
+            except OSError as exc:
+                last_err = exc
+                time.sleep(delay)
+        QMessageBox.critical(
+            self,
+            "Rename failed",
+            f"Could not write the new title after {attempts} attempts.\n"
+            f"The session file may be open in a running terminal — please try "
+            f"again in a moment.\n\n{last_err}",
+        )
+        return False
+
     def _open_project_folder(self) -> None:
         meta = self._current_meta()
         if meta is None or not meta.project_dir:
