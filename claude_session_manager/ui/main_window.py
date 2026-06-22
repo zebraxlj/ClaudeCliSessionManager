@@ -22,7 +22,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -201,13 +201,21 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Claude Session Manager")
-        self.resize(1200, 740)
+        self.resize(1920, 1080)
         self.setStyleSheet(STYLE)
         self._all_sessions: List[SessionMeta] = []
         self._current_scope: Optional[str] = None  # None / _SCOPE_ALL = all
         self._suppress_nav = False
+        self._laid_out = False
         self._build_ui()
         self.reload()
+
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if not self._laid_out:
+            self._laid_out = True
+            # Defer one tick so the splitter has its final on-screen width.
+            QTimer.singleShot(0, self._fit_nav_width)
 
     # ---- UI construction ------------------------------------------------
     def _build_ui(self) -> None:
@@ -219,6 +227,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
         splitter.setSizes([220, 360, 620])
+        self._splitter = splitter
         self.setCentralWidget(splitter)
 
     def _build_nav_panel(self) -> QWidget:
@@ -356,6 +365,28 @@ class MainWindow(QMainWindow):
 
         self._suppress_nav = False
         self.nav.setCurrentRow(target_row)
+
+    def _fit_nav_width(self) -> None:
+        """Lay out the panes at startup.
+
+        The nav column widens to fit the widest project name; the session list
+        then spans from the nav edge to the window's horizontal midpoint
+        (i.e. its width = half the window width minus the nav width); the
+        preview takes the remaining right half.
+        """
+        fm = self.nav.fontMetrics()
+        max_text = max(
+            (fm.horizontalAdvance(self.nav.item(i).text()) for i in range(self.nav.count())),
+            default=0,
+        )
+        # Account for item padding (7*2) + margin (6*2) + accent border (3) + slack.
+        desired = max_text + 7 * 2 + 6 * 2 + 3 + 24
+        nav_w = max(self.nav.minimumWidth(), min(desired, 480))  # clamp range
+
+        total = self._splitter.width()
+        list_w = max(200, total // 2 - nav_w)
+        preview_w = max(200, total - nav_w - list_w)
+        self._splitter.setSizes([nav_w, list_w, preview_w])
 
     def _on_nav_changed(self) -> None:
         if self._suppress_nav:
