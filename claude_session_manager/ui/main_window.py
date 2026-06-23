@@ -28,6 +28,7 @@ from PyQt5.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCurso
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -39,6 +40,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QShortcut,
     QSplitter,
+    QStyle,
     QStyledItemDelegate,
     QTextBrowser,
     QTextEdit,
@@ -68,58 +70,135 @@ _HEADER_H = 44
 _SCOPE_ALL = "__all__"
 
 STYLE = """
-QSplitter::handle { background: #e5e5e5; }
+/* Palette — warm Fluent light + Claude clay accent
+   surface #faf9f7 · nav #f3f1ee · card #ffffff · hairline #e9e6e1
+   text #1f1d1b · sub #6b6660 · accent #c15f3c · accent-line #cc785c
+   selection #f4e8e2 · hover #efe9e3 */
+
+* { outline: 0; }
+
+QWidget { background-color: #faf9f7; color: #1f1d1b; }
+
+QSplitter::handle { background: #e9e6e1; }
+QSplitter::handle:horizontal { width: 1px; }
 
 #headerBar {
-    background: #fafafa;
-    border-bottom: 1px solid #e5e5e5;
+    background: #faf9f7;
+    border-bottom: 1px solid #e9e6e1;
 }
-#headerTitle { font-weight: 600; font-size: 14px; padding-left: 4px; }
+#headerTitle { font-weight: 600; font-size: 15px; padding-left: 4px; color: #1f1d1b; }
 
-#nav {
-    background: #f3f3f3;
-    border: none;
-    outline: 0;
-}
-#nav::item {
-    padding: 7px 10px;
-    margin: 2px 6px;
-    border-radius: 6px;
+/* Nav rail + session list share one state-layer language */
+#nav { background: #f3f1ee; border: none; }
+#nav::item, #sessionList::item {
+    margin: 3px 8px;
+    border-radius: 8px;
     border-left: 3px solid transparent;
+    color: #1f1d1b;
 }
-#nav::item:hover { background: #e9e9e9; }
-#nav::item:selected {
-    background: #e1e1e1;
-    color: #000;
-    border-left: 3px solid #0067c0;
+#nav::item { padding: 8px 12px; }
+#nav::item:hover, #sessionList::item:hover { background: #efe7e0; }
+#nav::item:selected, #sessionList::item:selected {
+    background: #f4e8e2;
+    color: #b5563a;
+    border-left: 3px solid #cc785c;
 }
 
-#sessionList {
+/* Session list */
+#sessionList { background: #ffffff; border: none; }
+
+/* Inputs */
+QLineEdit {
     background: #ffffff;
-    border: none;
-    outline: 0;
-}
-#sessionList::item {
-    margin: 2px 6px;
+    border: 1px solid #e0dcd5;
     border-radius: 6px;
+    padding: 5px 9px;
+    selection-background-color: #cc785c;
+    selection-color: #ffffff;
 }
-#sessionList::item:hover { background: #f0f6fc; }
-#sessionList::item:selected { background: #cfe4fa; color: #000; }
+QLineEdit:focus { border: 1px solid #c15f3c; }
 
-#findBar {
-    background: #fafafa;
-    border: 1px solid #e0e0dc;
-    border-radius: 6px;
-}
-#findBar QPushButton {
-    border: none;
+/* Buttons — Material outlined, pill-shaped */
+QPushButton {
     background: transparent;
-    padding: 2px 6px;
-    font-size: 14px;
+    border: 1px solid #d8d2c9;
+    border-radius: 16px;
+    padding: 7px 16px;
+    color: #b5563a;
+    font-weight: 500;
 }
-#findBar QPushButton:hover { background: #e6e6e2; border-radius: 4px; }
-#findBar QPushButton:disabled { color: #bbb; }
-#findCount { color: #888; font-size: 13px; min-width: 64px; }
+QPushButton:hover { background: #f4e8e2; border-color: #d8c3b8; }
+QPushButton:pressed { background: #eeddd4; }
+QPushButton:disabled { color: #bcb6ac; background: transparent; border-color: #ececec; }
+/* Borderless circular icon button (Material icon button) */
+#iconBtn {
+    border: none; background: transparent; padding: 0;
+    font-size: 16px; border-radius: 18px; color: #1f1d1b;
+}
+#iconBtn:hover { background: #efe7e0; }
+#iconBtn:pressed { background: #e6ddd4; }
+/* Destructive action */
+#dangerBtn { color: #b42318; border-color: #e6cfc9; }
+#dangerBtn:hover { color: #b42318; border-color: #e6b4ad; background: #fdf3f1; }
+
+/* Preview */
+QTextBrowser {
+    background: #ffffff;
+    border: 1px solid #e9e6e1;
+    border-radius: 8px;
+    padding: 4px 8px;
+    selection-background-color: #cc785c;
+    selection-color: #ffffff;
+}
+
+/* Find bar */
+#findBar {
+    background: #ffffff;
+    border: 1px solid #e0dcd5;
+    border-radius: 8px;
+}
+#findBar QLineEdit { border: none; background: transparent; padding: 2px; }
+#findBar QPushButton {
+    border: none; background: transparent; padding: 2px 6px; font-size: 14px;
+}
+#findBar QPushButton:hover { background: #efe9e3; border-radius: 6px; }
+#findBar QPushButton:disabled { color: #c4bdb3; background: transparent; }
+#findCount { color: #6b6660; font-size: 13px; min-width: 64px; }
+#statusLabel { color: #6b6660; font-size: 13px; padding: 0 10px 8px; }
+#metaLabel { color: #6b6660; font-size: 13px; padding: 0 2px; }
+
+/* Context menu */
+QMenu {
+    background: #ffffff;
+    border: 1px solid #e0dcd5;
+    border-radius: 8px;
+    padding: 4px;
+}
+QMenu::item { padding: 6px 22px 6px 14px; border-radius: 6px; }
+QMenu::item:selected { background: #f4e8e2; color: #b5563a; }
+QMenu::separator { height: 1px; background: #ececec; margin: 4px 8px; }
+
+/* Scrollbars */
+QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; }
+QScrollBar::handle:vertical {
+    background: #d8d2c9; min-height: 28px; border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover { background: #c3bcb0; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar:horizontal { background: transparent; height: 12px; margin: 2px; }
+QScrollBar::handle:horizontal {
+    background: #d8d2c9; min-width: 28px; border-radius: 5px;
+}
+QScrollBar::handle:horizontal:hover { background: #c3bcb0; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
+
+/* Tooltip */
+QToolTip {
+    background: #ffffff; color: #1f1d1b;
+    border: 1px solid #e0dcd5; border-radius: 6px; padding: 4px 8px;
+}
 """
 
 
@@ -184,10 +263,13 @@ class _SessionItemDelegate(QStyledItemDelegate):
     with the current title. On commit it calls *on_rename(meta, new_title)*.
     """
 
-    _TITLE_COLOR = QColor("#1a1a1a")
-    _SUB_COLOR = QColor("#888888")
+    _TITLE_COLOR = QColor("#1f1d1b")
+    _TITLE_SELECTED = QColor("#b5563a")
+    _SUB_COLOR = QColor("#6b6660")
     _LEFT = 16
     _RIGHT = 12
+    _ICON = "💬"
+    _ICON_GAP = 28  # horizontal space reserved for the leading icon
 
     def __init__(self, parent=None, on_rename=None) -> None:
         super().__init__(parent)
@@ -230,20 +312,30 @@ class _SessionItemDelegate(QStyledItemDelegate):
 
         title = index.data(_TITLE_ROLE) or ""
         subtitle = index.data(_SUB_ROLE) or ""
+        selected = bool(option.state & QStyle.State_Selected)
         rect = option.rect
-        left = rect.left() + self._LEFT
-        width = rect.width() - self._LEFT - self._RIGHT
+        text_left = rect.left() + self._LEFT + self._ICON_GAP
+        width = rect.right() - text_left - self._RIGHT
 
         painter.save()
 
+        # Leading icon, vertically centred in the row.
+        icon_font = QFont(option.font)
+        icon_font.setPointSize(option.font.pointSize() + 2)
+        painter.setFont(icon_font)
+        painter.drawText(
+            QRect(rect.left() + self._LEFT, rect.top(), self._ICON_GAP, rect.height()),
+            Qt.AlignVCenter | Qt.AlignLeft,
+            self._ICON,
+        )
+
         title_font = QFont(option.font)
         title_font.setPointSize(option.font.pointSize() + 1)
-        title_font.setBold(False)
         painter.setFont(title_font)
-        painter.setPen(self._TITLE_COLOR)
+        painter.setPen(self._TITLE_SELECTED if selected else self._TITLE_COLOR)
         tfm = painter.fontMetrics()
         ty = rect.top() + 9 + tfm.ascent()
-        painter.drawText(left, ty, tfm.elidedText(title, Qt.ElideRight, width))
+        painter.drawText(text_left, ty, tfm.elidedText(title, Qt.ElideRight, width))
 
         sub_font = QFont(option.font)
         sub_font.setPointSize(max(option.font.pointSize() - 2, 8))
@@ -251,9 +343,20 @@ class _SessionItemDelegate(QStyledItemDelegate):
         painter.setPen(self._SUB_COLOR)
         sfm = painter.fontMetrics()
         sy = rect.top() + 9 + tfm.height() + 3 + sfm.ascent()
-        painter.drawText(left, sy, sfm.elidedText(subtitle, Qt.ElideRight, width))
+        painter.drawText(text_left, sy, sfm.elidedText(subtitle, Qt.ElideRight, width))
 
         painter.restore()
+
+
+def _apply_elevation(widget: QWidget, blur: int = 14, y: int = 2, alpha: int = 32) -> QWidget:
+    """Attach a soft Material-style drop shadow (elevation) to *widget*."""
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setXOffset(0)
+    effect.setYOffset(y)
+    effect.setColor(QColor(0, 0, 0, alpha))
+    widget.setGraphicsEffect(effect)
+    return widget
 
 
 def _make_header(*widgets: QWidget) -> QWidget:
@@ -266,6 +369,7 @@ def _make_header(*widgets: QWidget) -> QWidget:
     layout.setSpacing(6)
     for w in widgets:
         layout.addWidget(w)
+    _apply_elevation(bar, blur=12, y=2, alpha=28)  # top-app-bar elevation
     return bar
 
 
@@ -330,11 +434,13 @@ class MainWindow(QMainWindow):
         self.search_box.setClearButtonEnabled(True)
         self.search_box.textChanged.connect(self._apply_filter)
         refresh_btn = QPushButton("⟳")
+        refresh_btn.setObjectName("iconBtn")
         refresh_btn.setToolTip("Rescan sessions")
-        refresh_btn.setFixedWidth(34)
+        refresh_btn.setFixedWidth(36)
         refresh_btn.clicked.connect(self.reload)
         layout.addWidget(_make_header(self.search_box, refresh_btn))
 
+        layout.addSpacing(6)  # breathing room above the list
         self.list = QListWidget()
         self.list.setObjectName("sessionList")
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -352,11 +458,14 @@ class MainWindow(QMainWindow):
         rename_sc.setContext(Qt.WidgetWithChildrenShortcut)
         rename_sc.activated.connect(self._rename_selected)
 
+        layout.addSpacing(6)  # breathing room below the list
         btn_bar = QHBoxLayout()
-        btn_bar.setContentsMargins(6, 4, 6, 4)
+        btn_bar.setContentsMargins(12, 8, 12, 8)  # L/R 12 > inter-button 10; roomy top
+        btn_bar.setSpacing(10)
         self.open_proj_btn = QPushButton("Open project folder")
         self.open_store_btn = QPushButton("Open storage folder")
         self.delete_btn = QPushButton("Delete")
+        self.delete_btn.setObjectName("dangerBtn")
         for b in (self.open_proj_btn, self.open_store_btn, self.delete_btn):
             b.setEnabled(False)
         self.open_proj_btn.clicked.connect(self._open_project_folder)
@@ -368,7 +477,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_bar)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #888; font-size: 13px; padding: 0 8px 6px;")
+        self.status_label.setObjectName("statusLabel")
         layout.addWidget(self.status_label)
         return panel
 
@@ -386,7 +495,7 @@ class MainWindow(QMainWindow):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(8, 6, 8, 8)
         self.meta_label = QLabel("")
-        self.meta_label.setStyleSheet("color: #888; font-size: 13px; padding: 0 2px;")
+        self.meta_label.setObjectName("metaLabel")
         self.meta_label.setWordWrap(True)
         self.preview = QTextBrowser()
         self.preview.setOpenExternalLinks(True)
@@ -439,6 +548,7 @@ class MainWindow(QMainWindow):
         esc_sc.setContext(Qt.WidgetWithChildrenShortcut)
         esc_sc.activated.connect(self._hide_find)
 
+        _apply_elevation(bar, blur=18, y=3, alpha=46)  # floating card elevation
         self.find_bar = bar
         self._find_matches: List[QTextCursor] = []
         self._find_idx = -1
