@@ -140,6 +140,7 @@ QPushButton:disabled { color: #bcb6ac; background: transparent; border-color: #e
 /* Destructive action */
 #dangerBtn { color: #b42318; border-color: #e6cfc9; }
 #dangerBtn:hover { color: #b42318; border-color: #e6b4ad; background: #fdf3f1; }
+#dangerBtn:disabled { color: #bcb6ac; border-color: #ececec; background: transparent; }
 
 /* Preview */
 QTextBrowser {
@@ -588,6 +589,7 @@ class MainWindow(QMainWindow):
             label.setFlags(Qt.NoItemFlags)  # non-selectable section header
             lf = label.font()
             lf.setPointSize(max(lf.pointSize() - 2, 8))
+            lf.setBold(True)
             label.setFont(lf)
             label.setForeground(Qt.gray)
             self.nav.addItem(label)
