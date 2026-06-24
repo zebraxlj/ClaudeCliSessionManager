@@ -24,7 +24,14 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QRect, QSize, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor
+from PyQt5.QtGui import (
+    QColor,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -55,6 +62,7 @@ except ImportError:  # pragma: no cover - dependency guaranteed by pyproject
 
 from ..models import SessionMeta
 from ..preview import render_session_html
+from ..resources import ICON_PATH
 from ..scanner import scan_sessions
 
 # Role used to stash data on list items.
@@ -378,6 +386,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Claude Session Manager")
+        self.setWindowIcon(QIcon(ICON_PATH))
         self.resize(1920, 1080)
         self.setStyleSheet(STYLE)
         self._all_sessions: List[SessionMeta] = []
@@ -588,7 +597,7 @@ class MainWindow(QMainWindow):
             label = QListWidgetItem("PROJECTS")
             label.setFlags(Qt.NoItemFlags)  # non-selectable section header
             lf = label.font()
-            lf.setPointSize(max(lf.pointSize() - 2, 8))
+            lf.setPointSize(lf.pointSize() + 1)
             lf.setBold(True)
             label.setFont(lf)
             label.setForeground(Qt.gray)
@@ -902,7 +911,21 @@ class MainWindow(QMainWindow):
 
 
 def run() -> int:
+    # On Windows, tell the shell this process is its own application (not just a
+    # generic Python host) so the taskbar groups it under — and shows — our icon
+    # rather than the Python interpreter's. Must happen before any window shows.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "ClaudeSessionManager"
+            )
+        except Exception:  # pragma: no cover - cosmetic only, never fatal
+            pass
+
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(ICON_PATH))
     # Base application font: Segoe UI for Latin, falling back to Microsoft YaHei
     # for CJK so Chinese renders in the clean system UI font (not serif SimSun).
     base_font = QFont("Segoe UI", 11)
