@@ -59,6 +59,7 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
     except OSError:
         return None
 
+    custom_title: Optional[str] = None
     title: Optional[str] = None
     project_dir: Optional[str] = None
     first_prompt: Optional[str] = None
@@ -80,7 +81,9 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
                     continue
 
                 btype = obj.get("type")
-                if btype == "ai-title":
+                if btype == "custom-title":
+                    custom_title = obj.get("customTitle") or custom_title
+                elif btype == "ai-title":
                     title = obj.get("aiTitle") or title
                 elif btype == "last-prompt":
                     last_prompt = obj.get("lastPrompt") or last_prompt
@@ -99,9 +102,11 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
     except OSError:
         return None
 
-    # Title fallback chain: ai-title -> first user prompt -> last-prompt -> id.
+    # Title fallback chain, mirroring `claude --resume`:
+    # custom-title (user-set) -> ai-title -> first user prompt -> last-prompt -> id.
     display_title = (
-        title
+        custom_title
+        or title
         or _first_line(first_prompt or "")
         or _first_line(last_prompt or "")
         or path.stem
@@ -142,5 +147,26 @@ def scan_sessions(root: Optional[Path] = None) -> List[SessionMeta]:
             meta = parse_meta(f)
             if meta is not None:
                 sessions.append(meta)
+    _backfill_project_dir(sessions)
     sessions.sort(key=lambda s: s.modified_at, reverse=True)
     return sessions
+
+
+def _backfill_project_dir(sessions: List[SessionMeta]) -> None:
+    """Give sessions missing a recorded ``project_dir`` the one used by siblings.
+
+    A session whose `.jsonl` holds only metadata lines (e.g. a compacted session
+    with just ``ai-title`` / ``last-prompt``) never records a ``cwd``, so its
+    ``project_dir`` is ``None``. Since every file in one storage directory belongs
+    to the same project, we adopt a sibling's real ``project_dir`` — keeping the
+    grouping key stable so the session lists under its true project rather than a
+    second look-alike group keyed on the encoded directory name.
+    """
+    known: dict = {}
+    for s in sessions:
+        if s.project_dir and s.storage_dir not in known:
+            known[s.storage_dir] = s.project_dir
+    for s in sessions:
+        if not s.project_dir and s.storage_dir in known:
+            s.project_dir = known[s.storage_dir]
+            s.project_name = Path(s.project_dir).name or s.project_dir
