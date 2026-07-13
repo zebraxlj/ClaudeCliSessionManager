@@ -453,7 +453,9 @@ class MainWindow(QMainWindow):
         layout.addSpacing(6)  # breathing room above the list
         self.list = QListWidget()
         self.list.setObjectName("sessionList")
-        self.list.setSelectionMode(QAbstractItemView.SingleSelection)
+        # ExtendedSelection lets users Ctrl/Shift-click to multi-select for
+        # bulk actions like delete; preview still tracks the "current" item.
+        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setEditTriggers(QAbstractItemView.NoEditTriggers)  # edit only via F2 / menu
         self.list.setItemDelegate(
@@ -462,6 +464,7 @@ class MainWindow(QMainWindow):
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_context_menu)
         self.list.currentItemChanged.connect(self._on_selection_changed)
+        self.list.itemSelectionChanged.connect(self._on_multi_selection_changed)
         layout.addWidget(self.list, 1)
 
         rename_sc = QShortcut(QKeySequence(Qt.Key_F2), self.list)
@@ -698,12 +701,26 @@ class MainWindow(QMainWindow):
         data = item.data(_META_ROLE)
         return data if isinstance(data, SessionMeta) else None
 
+    def _selected_metas(self) -> List[SessionMeta]:
+        """Every selected row's SessionMeta (may be empty)."""
+        out: List[SessionMeta] = []
+        for item in self.list.selectedItems():
+            data = item.data(_META_ROLE)
+            if isinstance(data, SessionMeta):
+                out.append(data)
+        return out
+
+    def _on_multi_selection_changed(self) -> None:
+        """Update the Delete button label + enabled state as selection grows."""
+        n = len(self.list.selectedItems())
+        self.delete_btn.setEnabled(n > 0)
+        self.delete_btn.setText("Delete" if n <= 1 else f"Delete ({n})")
+
     def _on_selection_changed(self) -> None:
         meta = self._current_meta()
         has = meta is not None
         self.open_proj_btn.setEnabled(has and bool(meta and meta.project_dir))
         self.open_store_btn.setEnabled(has)
-        self.delete_btn.setEnabled(has)
         if meta is None:
             self.header_label.setText("Select a session to preview")
             self.meta_label.setText("")
@@ -787,15 +804,28 @@ class MainWindow(QMainWindow):
         data = item.data(_META_ROLE)
         if not isinstance(data, SessionMeta):
             return
-        self.list.setCurrentItem(item)
+        # If the clicked row isn't part of the current multi-selection, treat
+        # this as a single-row action and reset selection to just that row.
+        if not item.isSelected():
+            self.list.clearSelection()
+            self.list.setCurrentItem(item)
+            item.setSelected(True)
+        selected = self._selected_metas()
+        multi = len(selected) > 1
         menu = QMenu(self)
         act_rename = menu.addAction("Rename… (F2)")
+        act_rename.setEnabled(not multi)
         menu.addSeparator()
         act_proj = menu.addAction("Open project folder")
-        act_proj.setEnabled(bool(data.project_dir))
+        act_proj.setEnabled(not multi and bool(data.project_dir))
         act_store = menu.addAction("Open storage folder")
+        act_store.setEnabled(not multi)
         menu.addSeparator()
-        act_del = menu.addAction("Delete (to Recycle Bin)")
+        del_label = (
+            f"Delete {len(selected)} sessions (to Recycle Bin)"
+            if multi else "Delete (to Recycle Bin)"
+        )
+        act_del = menu.addAction(del_label)
         chosen = menu.exec_(self.list.viewport().mapToGlobal(pos))
         if chosen == act_rename:
             self._rename_selected()
@@ -885,28 +915,48 @@ class MainWindow(QMainWindow):
             )
 
     def _delete_selected(self) -> None:
-        meta = self._current_meta()
-        if meta is None:
+        metas = self._selected_metas()
+        if not metas:
             return
+        if len(metas) == 1:
+            m = metas[0]
+            prompt = (
+                f"Move this session to the Recycle Bin?\n\n{m.title}\n{m.filename}"
+            )
+            title = "Delete session"
+        else:
+            preview_lines = "\n".join(f"• {m.title}" for m in metas[:5])
+            more = "" if len(metas) <= 5 else f"\n… and {len(metas) - 5} more"
+            prompt = (
+                f"Move {len(metas)} sessions to the Recycle Bin?\n\n"
+                f"{preview_lines}{more}"
+            )
+            title = "Delete sessions"
         resp = QMessageBox.question(
-            self,
-            "Delete session",
-            f"Move this session to the Recycle Bin?\n\n"
-            f"{meta.title}\n{meta.filename}",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            self, title, prompt, QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if resp != QMessageBox.Yes:
             return
-        try:
-            if send2trash is None:
-                raise RuntimeError("send2trash is not installed")
-            send2trash(str(meta.file_path))
-        except Exception as exc:  # noqa: BLE001 - report any deletion failure
+        if send2trash is None:
             QMessageBox.critical(
-                self, "Delete failed", f"Could not delete the file:\n{exc}"
+                self, "Delete failed", "send2trash is not installed."
             )
             return
+        failures: List[Tuple[SessionMeta, str]] = []
+        for m in metas:
+            try:
+                send2trash(str(m.file_path))
+            except Exception as exc:  # noqa: BLE001 - collect per-file failures
+                failures.append((m, str(exc)))
+        if failures:
+            detail = "\n".join(f"{m.filename}: {err}" for m, err in failures[:10])
+            more = "" if len(failures) <= 10 else f"\n… and {len(failures) - 10} more"
+            QMessageBox.critical(
+                self,
+                "Delete failed",
+                f"{len(failures)} of {len(metas)} could not be deleted:\n\n"
+                f"{detail}{more}",
+            )
         self.reload()
 
 
