@@ -59,8 +59,10 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
     except OSError:
         return None
 
+    agent_name: Optional[str] = None
     custom_title: Optional[str] = None
     title: Optional[str] = None
+    summary: Optional[str] = None
     project_dir: Optional[str] = None
     first_prompt: Optional[str] = None
     last_prompt: Optional[str] = None
@@ -81,10 +83,14 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
                     continue
 
                 btype = obj.get("type")
-                if btype == "custom-title":
+                if btype == "agent-name":
+                    agent_name = obj.get("agentName") or agent_name
+                elif btype == "custom-title":
                     custom_title = obj.get("customTitle") or custom_title
                 elif btype == "ai-title":
                     title = obj.get("aiTitle") or title
+                elif btype == "summary":
+                    summary = obj.get("summary") or summary
                 elif btype == "last-prompt":
                     last_prompt = obj.get("lastPrompt") or last_prompt
                 elif btype in ("user", "assistant"):
@@ -102,11 +108,15 @@ def parse_meta(path: Path) -> Optional[SessionMeta]:
     except OSError:
         return None
 
-    # Title fallback chain, mirroring `claude --resume`:
-    # custom-title (user-set) -> ai-title -> first user prompt -> last-prompt -> id.
+    # Title fallback chain, mirroring Claude Code's own session-title resolver:
+    # agent-name -> custom-title -> ai-title -> summary -> first prompt -> last
+    # prompt -> id. (agent-name normally mirrors custom-title; summary is the
+    # compaction summary used when no explicit title was set.)
     display_title = (
-        custom_title
+        agent_name
+        or custom_title
         or title
+        or _first_line(summary or "")
         or _first_line(first_prompt or "")
         or _first_line(last_prompt or "")
         or path.stem
